@@ -3,6 +3,7 @@ import shutil
 import time
 import tkinter as tk
 from tkinter import filedialog
+import json
 
 from config import FILE_TYPE_MAPPING, TARGET_DIRS
 
@@ -42,46 +43,77 @@ def format_size(bytes_size):
 
 # Main function to organize files in a folder
 def organize_files(folder_path):
-    # Initialize stats dictionary to track count and size of each category
     stats = {category: {'count': 0, 'size': 0} for category in TARGET_DIRS}
-    start_time = time.time()  # Start timer
+    undo_log = []  # 📝 Track original and new file paths
+    start_time = time.time()
 
-    # Loop through all files in the folder
     for filename in os.listdir(folder_path):
         src = os.path.join(folder_path, filename)
 
-        # Only process files (skip folders)
         if os.path.isfile(src):
             ext = os.path.splitext(filename)[1].lower()
             file_size = os.path.getsize(src)
             moved = False
 
-            # Try to match file extension to a known category
             for category, extensions in FILE_TYPE_MAPPING.items():
                 if ext in extensions:
-                    # Create the destination folder if it doesn't exist
                     dest_dir_name = TARGET_DIRS.get(category, category)
                     dest_folder = os.path.join(folder_path, dest_dir_name)
                     os.makedirs(dest_folder, exist_ok=True)
-
-                    # Move the file and update stats
-                    shutil.move(src, os.path.join(dest_folder, filename))
+                    dest_path = os.path.join(dest_folder, filename)
+                    
+                    shutil.move(src, dest_path)
                     stats[category]['count'] += 1
                     stats[category]['size'] += file_size
+
+                    undo_log.append({"from": dest_path, "to": src})  # 👈 Log the move
                     moved = True
                     break
 
             if not moved:
-                # Move unrecognized file types to "Others"
                 category = 'Others'
                 other_folder = os.path.join(folder_path, TARGET_DIRS.get(category, category))
                 os.makedirs(other_folder, exist_ok=True)
-                shutil.move(src, os.path.join(other_folder, filename))
+                dest_path = os.path.join(other_folder, filename)
+
+                shutil.move(src, dest_path)
                 stats[category]['count'] += 1
                 stats[category]['size'] += file_size
 
-    end_time = time.time()  # End timer
-    print_summary_report(stats, end_time - start_time)  # Display results
+                undo_log.append({"from": dest_path, "to": src})
+
+    end_time = time.time()
+
+    # Save undo log to disk
+    with open(os.path.join(folder_path, ".undo_log.json"), "w") as f:
+        json.dump(undo_log, f, indent=2)
+
+    print_summary_report(stats, end_time - start_time)
+
+    # Prompt for undo
+    prompt_undo(folder_path)
+
+def prompt_undo(folder_path):
+    choice = input("\n⚠️ Would you like to undo the changes? (y/n): ").strip().lower()
+
+    if choice == 'y':
+        undo_file = os.path.join(folder_path, ".undo_log.json")
+        if os.path.exists(undo_file):
+            with open(undo_file, "r") as f:
+                undo_log = json.load(f)
+
+            for entry in undo_log:
+                if os.path.exists(entry["from"]):
+                    os.makedirs(os.path.dirname(entry["to"]), exist_ok=True)
+                    shutil.move(entry["from"], entry["to"])
+
+            os.remove(undo_file)
+            print("✅ Undo complete! Files moved back to original locations.")
+        else:
+            print("❌ No undo log found. Nothing to undo.")
+    else:
+        print("✅ Changes kept. If needed, you can run undo later using the log.")
+
 
 # Print a formatted summary of the organization process
 def print_summary_report(stats, duration):
