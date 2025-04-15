@@ -71,7 +71,9 @@ def organize_files(folder_path):
                     break
 
             if not moved:
-                category = 'Others'
+
+                category = ai_classify_file_content(src)
+                print(f"[AI] {filename} classified as: {category}")
                 other_folder = os.path.join(folder_path, TARGET_DIRS.get(category, category))
                 os.makedirs(other_folder, exist_ok=True)
                 dest_path = os.path.join(other_folder, filename)
