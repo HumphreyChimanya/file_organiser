@@ -3,11 +3,9 @@ import shutil
 import time
 import tkinter as tk
 from tkinter import filedialog
-import json
 
 from config import FILE_TYPE_MAPPING, TARGET_DIRS
 
-# Prompt the user to either type a path or use a file dialog to select a folder
 def get_folder_path():
     print("Choose how to select the folder:")
     print("1. Enter path manually")
@@ -16,40 +14,33 @@ def get_folder_path():
     choice = input("Enter your choice (1 or 2): ")
 
     if choice == '1':
-        # Get folder path from user input
         folder = input("Enter the full path of the folder: ").strip()
     elif choice == '2':
-        # Launch GUI folder picker using tkinter
         root = tk.Tk()
-        root.withdraw()  # Hide the root tkinter window
+        root.withdraw()
         folder = filedialog.askdirectory(title="Select Folder to Organize")
     else:
         print("Invalid choice.")
         return None
 
-    # Make sure the folder exists
     if not folder or not os.path.isdir(folder):
         print("That path doesn't exist or is not a folder.")
         return None
 
     return folder
 
-# Helper function to convert bytes to KB/MB string
 def format_size(bytes_size):
     kb = bytes_size / 1024
     if kb < 1024:
         return f"{kb:.2f} KB"
     return f"{kb / 1024:.2f} MB"
 
-# Main function to organize files in a folder
-def organize_files(folder_path):
-    stats = {category: {'count': 0, 'size': 0} for category in TARGET_DIRS}
-    undo_log = []  # 📝 Track original and new file paths
-    start_time = time.time()
+# Plan what changes would be made without applying them
+def get_planned_moves(folder_path):
+    planned = []
 
     for filename in os.listdir(folder_path):
         src = os.path.join(folder_path, filename)
-
         if os.path.isfile(src):
             ext = os.path.splitext(filename)[1].lower()
             file_size = os.path.getsize(src)
@@ -59,65 +50,32 @@ def organize_files(folder_path):
                 if ext in extensions:
                     dest_dir_name = TARGET_DIRS.get(category, category)
                     dest_folder = os.path.join(folder_path, dest_dir_name)
-                    os.makedirs(dest_folder, exist_ok=True)
                     dest_path = os.path.join(dest_folder, filename)
-                    
-                    shutil.move(src, dest_path)
-                    stats[category]['count'] += 1
-                    stats[category]['size'] += file_size
-
-                    undo_log.append({"from": dest_path, "to": src})  # 👈 Log the move
+                    planned.append((filename, src, dest_path, category, file_size))
                     moved = True
                     break
 
             if not moved:
+                category = 'Others'
+                dest_folder = os.path.join(folder_path, TARGET_DIRS.get(category, category))
+                dest_path = os.path.join(dest_folder, filename)
+                planned.append((filename, src, dest_path, category, file_size))
 
-                category = ai_classify_file_content(src)
-                print(f"[AI] {filename} classified as: {category}")
-                other_folder = os.path.join(folder_path, TARGET_DIRS.get(category, category))
-                os.makedirs(other_folder, exist_ok=True)
-                dest_path = os.path.join(other_folder, filename)
+    return planned
 
-                shutil.move(src, dest_path)
-                stats[category]['count'] += 1
-                stats[category]['size'] += file_size
+def organize_files(folder_path, planned_moves):
+    stats = {category: {'count': 0, 'size': 0} for category in TARGET_DIRS}
+    start_time = time.time()
 
-                undo_log.append({"from": dest_path, "to": src})
+    for filename, src, dest, category, size in planned_moves:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.move(src, dest)
+        stats[category]['count'] += 1
+        stats[category]['size'] += size
 
     end_time = time.time()
-
-    # Save undo log to disk
-    with open(os.path.join(folder_path, ".undo_log.json"), "w") as f:
-        json.dump(undo_log, f, indent=2)
-
     print_summary_report(stats, end_time - start_time)
 
-    # Prompt for undo
-    prompt_undo(folder_path)
-
-def prompt_undo(folder_path):
-    choice = input("\n⚠️ Would you like to undo the changes? (y/n): ").strip().lower()
-
-    if choice == 'y':
-        undo_file = os.path.join(folder_path, ".undo_log.json")
-        if os.path.exists(undo_file):
-            with open(undo_file, "r") as f:
-                undo_log = json.load(f)
-
-            for entry in undo_log:
-                if os.path.exists(entry["from"]):
-                    os.makedirs(os.path.dirname(entry["to"]), exist_ok=True)
-                    shutil.move(entry["from"], entry["to"])
-
-            os.remove(undo_file)
-            print("✅ Undo complete! Files moved back to original locations.")
-        else:
-            print("❌ No undo log found. Nothing to undo.")
-    else:
-        print("✅ Changes kept. If needed, you can run undo later using the log.")
-
-
-# Print a formatted summary of the organization process
 def print_summary_report(stats, duration):
     print("\n📊 Summary Report:")
     total_files = 0
@@ -132,11 +90,26 @@ def print_summary_report(stats, duration):
     print(f"💾 Total size organized: {format_size(total_size)}")
     print(f"⏱ Time taken: {duration:.2f} seconds")
 
-# Program entry point
+def review_and_confirm(folder_path):
+    planned_moves = get_planned_moves(folder_path)
+
+    if not planned_moves:
+        print("✅ No files to organize.")
+        return
+
+    print("\n🔍 Planned File Organization:\n")
+    for filename, _, dest, category, size in planned_moves:
+        print(f" - {filename} → {category}/ ({format_size(size)})")
+
+    confirm = input("\n⚠️ Do you want to apply these changes? (y/n): ").strip().lower()
+    if confirm == 'y':
+        organize_files(folder_path, planned_moves)
+    else:
+        print("❌ No changes were made.")
+
 if __name__ == "__main__":
     folder = get_folder_path()
     if folder:
-        organize_files(folder)
+        review_and_confirm(folder)
     else:
         print("No folder selected. Exiting.")
-
