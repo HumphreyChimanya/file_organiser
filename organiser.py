@@ -1,10 +1,13 @@
 import os
 import shutil
 import time
+import json
 import tkinter as tk
 from tkinter import filedialog
 
 from config import FILE_TYPE_MAPPING, TARGET_DIRS
+
+UNDO_LOG = "undo_log.json"
 
 def get_folder_path():
     print("Choose how to select the folder:")
@@ -35,7 +38,6 @@ def format_size(bytes_size):
         return f"{kb:.2f} KB"
     return f"{kb / 1024:.2f} MB"
 
-# Plan what changes would be made without applying them
 def get_planned_moves(folder_path):
     planned = []
 
@@ -65,6 +67,8 @@ def get_planned_moves(folder_path):
 
 def organize_files(folder_path, planned_moves):
     stats = {category: {'count': 0, 'size': 0} for category in TARGET_DIRS}
+    undo_records = []
+
     start_time = time.time()
 
     for filename, src, dest, category, size in planned_moves:
@@ -72,6 +76,11 @@ def organize_files(folder_path, planned_moves):
         shutil.move(src, dest)
         stats[category]['count'] += 1
         stats[category]['size'] += size
+        undo_records.append({'from': dest, 'to': src})
+
+    # Save undo log
+    with open(os.path.join(folder_path, UNDO_LOG), 'w') as f:
+        json.dump(undo_records, f, indent=2)
 
     end_time = time.time()
     print_summary_report(stats, end_time - start_time)
@@ -90,6 +99,32 @@ def print_summary_report(stats, duration):
     print(f"💾 Total size organized: {format_size(total_size)}")
     print(f"⏱ Time taken: {duration:.2f} seconds")
 
+def prompt_undo(folder_path):
+    choice = input("\n↩️ Would you like to undo the changes? (y/n): ").strip().lower()
+    if choice != 'y':
+        print("👍 Changes kept.")
+        return
+
+    undo_path = os.path.join(folder_path, UNDO_LOG)
+    if not os.path.exists(undo_path):
+        print("🚫 No undo log found.")
+        return
+
+    with open(undo_path, 'r') as f:
+        undo_moves = json.load(f)
+
+    for move in undo_moves:
+        from_path = move['from']
+        to_path = move['to']
+
+        if os.path.exists(from_path):
+            os.makedirs(os.path.dirname(to_path), exist_ok=True)
+            shutil.move(from_path, to_path)
+            print(f"✅ Undone: {os.path.basename(from_path)}")
+
+    os.remove(undo_path)
+    print("🧹 Undo complete.")
+
 def review_and_confirm(folder_path):
     planned_moves = get_planned_moves(folder_path)
 
@@ -104,6 +139,7 @@ def review_and_confirm(folder_path):
     confirm = input("\n⚠️ Do you want to apply these changes? (y/n): ").strip().lower()
     if confirm == 'y':
         organize_files(folder_path, planned_moves)
+        prompt_undo(folder_path)
     else:
         print("❌ No changes were made.")
 
